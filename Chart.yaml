@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Chart
+name: raibis-voice-welcome
+version: v0.0.1
+description: Double-clap home welcome automation — detects two claps, speaks a random greeting, opens YouTube and launches Claude + Cursor side by side.
+appVersion: "0.0.1"
+keywords:
+  - voice
+  - automation
+  - home
+  - clap-detection
+  - welcome
+maintainers:
+  - name: Rubix

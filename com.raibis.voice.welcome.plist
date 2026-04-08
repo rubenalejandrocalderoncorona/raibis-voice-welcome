@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.raibis.voice.welcome</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>PATH_TO_REPO/bienvenido_jarvis.py</string>
+    </array>
+
+    <!-- Start automatically when the user logs in -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart the script if it exits unexpectedly -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Redirect stdout/stderr for debugging -->
+    <key>StandardOutPath</key>
+    <string>/tmp/raibis-voice-welcome.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/raibis-voice-welcome.error.log</string>
+</dict>
+</plist>
