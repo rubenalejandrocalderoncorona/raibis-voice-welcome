@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Chart
 name: raibis-voice-welcome
-version: v0.0.2
+version: v0.0.3
 description: Double-clap home welcome automation — detects two claps, speaks a random greeting, opens YouTube and launches Claude + Cursor side by side.
-appVersion: "0.0.2"
+appVersion: "0.0.3"
 keywords:
   - voice
   - automation
