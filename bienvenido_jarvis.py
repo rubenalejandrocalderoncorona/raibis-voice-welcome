@@ -2,38 +2,38 @@
 """
 Double-clap welcome script for Señor Rubix / Patronzote / Señor Rubius.
 
-Detects 2 claps → AI voice says welcome (random) → opens YouTube → Claude + Cursor side by side.
+Detects 2 claps → Spanish voice says welcome (random) → opens YouTube in Chrome.
 
 Dependencies:
-    pip install sounddevice numpy pyttsx3
+    pip install sounddevice numpy
 
 Usage:
     python bienvenido_jarvis.py
 """
 
-import os
 import sys
 import time
 import random
 import threading
 import subprocess
-import webbrowser
 
 import numpy as np
 import sounddevice as sd
-import pyttsx3
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Configuración
 # ──────────────────────────────────────────────────────────────────────────────
 SAMPLE_RATE    = 44100
 BLOCK_SIZE     = int(SAMPLE_RATE * 0.05)   # 50 ms per block
-THRESHOLD      = 0.20     # Minimum RMS to count as a clap  ← adjust if failing
-COOLDOWN       = 0.1      # Minimum seconds between claps
+THRESHOLD      = 0.10     # Minimum RMS to count as a clap  ← adjust if failing
+COOLDOWN       = 0.4      # Minimum seconds between claps (single clap burst ~200-300ms)
 DOUBLE_WINDOW  = 2.0      # Time window to detect second clap
 
-YOUTUBE_URL    = "https://www.youtube.com/watch?v=hEIexwwiKKU"
-NEW_PROJECT    = os.path.expanduser("~/Desktop/nuevo_proyecto")
+YOUTUBE_URL    = "https://www.youtube.com/watch?v=pAgnJDJN4VA&list=RDpAgnJDJN4VA&start_radio=1"
+
+# macOS Spanish voices — ranked by preference (native speakers, no API needed)
+# Change SPANISH_VOICE to any voice from: say -v '?' | grep es_
+SPANISH_VOICE  = "Mónica"   # es_ES — clear Castilian Spanish
 
 # Shuffle greetings — add or change these freely
 MENSAJES = [
@@ -90,119 +90,36 @@ def secuencia_bienvenida():
     mensaje = random.choice(MENSAJES)
     hablar(mensaje)
     abrir_youtube()
-    abrir_apps_lado_a_lado()
 
     print("\n  Secuencia completada.\n")
 
 
 def hablar(texto: str):
-    """Local TTS with pyttsx3 (uses system voices, no API key needed)."""
+    """TTS using macOS native Spanish voices via the 'say' command."""
     print(f"  Diciendo: '{texto}'")
 
-    # macOS: try 'say' command first (best quality, Spanish voice)
-    resultado = subprocess.run(
-        ["say", "-v", "Monica", texto],
-        capture_output=True
-    )
+    # Try preferred Spanish voice first
+    resultado = subprocess.run(["say", "-v", SPANISH_VOICE, texto], capture_output=True)
     if resultado.returncode == 0:
-        return  # success with Monica (macOS Spanish voice)
+        return
 
-    # Fallback: pyttsx3
-    engine = pyttsx3.init()
-    voices = engine.getProperty("voices")
+    # Fallback: any available Spanish voice
+    fallbacks = ["Paulina", "Rocko (Spanish (Spain))", "Reed (Spanish (Spain))"]
+    for voz in fallbacks:
+        r = subprocess.run(["say", "-v", voz, texto], capture_output=True)
+        if r.returncode == 0:
+            print(f"     Fallback voice used: {voz}")
+            return
 
-    # Look for Spanish voice
-    esp = [v for v in voices if "es" in v.id.lower() or "spanish" in v.name.lower()]
-    if esp:
-        engine.setProperty("voice", esp[0].id)
-        print(f"     Voice selected: {esp[0].name}")
-    else:
-        print("     Using default voice (no Spanish voice found)")
-
-    engine.setProperty("rate", 148)
-    engine.say(texto)
-    engine.runAndWait()
+    # Last resort: default system voice
+    print("     Warning: no Spanish voice found, using system default")
+    subprocess.run(["say", texto], capture_output=True)
 
 
 def abrir_youtube():
-    print(f"  Opening YouTube...")
-    webbrowser.open(YOUTUBE_URL)
+    print("  Opening YouTube in Chrome...")
+    subprocess.Popen(["open", "-a", "Google Chrome", YOUTUBE_URL])
     time.sleep(1.2)
-
-
-def abrir_apps_lado_a_lado():
-    sw, sh = obtener_resolucion_pantalla()
-    mitad = sw // 2
-
-    os.makedirs(NEW_PROJECT, exist_ok=True)
-
-    # Open Claude
-    print("  Opening Claude...")
-    subprocess.Popen(["open", "-a", "Claude"])
-    time.sleep(1.8)
-
-    # Open Cursor
-    print("  Opening Cursor...")
-    cursor_cmd = encontrar_cursor()
-    if cursor_cmd:
-        subprocess.Popen([cursor_cmd, NEW_PROJECT])
-    else:
-        subprocess.Popen(["open", "-a", "Cursor", NEW_PROJECT])
-    time.sleep(1.8)
-
-    # Side-by-side layout with AppleScript
-    print("  Organizing windows...")
-    applescript = f"""
-    tell application "System Events"
-        try
-            tell process "Claude"
-                set frontmost to true
-                set position of window 1 to {{0, 0}}
-                set size of window 1 to {{{mitad}, {sh}}}
-            end tell
-        end try
-        try
-            tell process "Cursor"
-                set frontmost to true
-                set position of window 1 to {{{mitad}, 0}}
-                set size of window 1 to {{{mitad}, {sh}}}
-            end tell
-        end try
-    end tell
-    """
-    subprocess.run(["osascript", "-e", applescript], capture_output=True)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  Utilities
-# ──────────────────────────────────────────────────────────────────────────────
-def obtener_resolucion_pantalla() -> tuple[int, int]:
-    try:
-        out = subprocess.run(
-            ["osascript", "-e",
-             "tell application \"Finder\" to get bounds of window of desktop"],
-            capture_output=True, text=True
-        ).stdout.strip()
-        parts = [int(x.strip()) for x in out.split(",")]
-        return parts[2], parts[3]
-    except Exception:
-        return 1920, 1080
-
-
-def encontrar_cursor():
-    """Returns the Cursor CLI path if available."""
-    candidatos = [
-        "/usr/local/bin/cursor",
-        "/opt/homebrew/bin/cursor",
-        os.path.expanduser("~/.cursor/bin/cursor"),
-    ]
-    for path in candidatos:
-        if os.path.isfile(path):
-            return path
-    result = subprocess.run(["which", "cursor"], capture_output=True, text=True)
-    if result.returncode == 0:
-        return result.stdout.strip()
-    return None
 
 
 # ──────────────────────────────────────────────────────────────────────────────
