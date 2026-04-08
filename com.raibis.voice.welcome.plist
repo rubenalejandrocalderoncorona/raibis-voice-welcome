@@ -8,9 +8,13 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <!-- Use the venv python; replace PATH_TO_REPO with your absolute clone path -->
+        <string>PATH_TO_REPO/venv/bin/python3</string>
         <string>PATH_TO_REPO/bienvenido_jarvis.py</string>
     </array>
+
+    <key>WorkingDirectory</key>
+    <string>PATH_TO_REPO</string>
 
     <!-- Start automatically when the user logs in -->
     <key>RunAtLoad</key>
@@ -20,7 +24,10 @@
     <key>KeepAlive</key>
     <true/>
 
-    <!-- Redirect stdout/stderr for debugging -->
+    <!-- Wait 5 seconds before restarting on crash -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
     <key>StandardOutPath</key>
     <string>/tmp/raibis-voice-welcome.log</string>
     <key>StandardErrorPath</key>

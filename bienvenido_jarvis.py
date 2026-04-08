@@ -46,12 +46,12 @@ SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
 VOSK_MODEL    = os.path.join(SCRIPT_DIR, "vosk-model-small-en-us-0.15")
 LANG_FILE     = os.path.join(SCRIPT_DIR, ".lang")   # persists language setting
 
-# English voice — lighter British male (less deep than Daniel)
-JARVIS_VOICE  = "Reed (English (UK))"
+# English voice — Daniel (en_GB), original Jarvis-style deep British male
+JARVIS_VOICE  = "Daniel"
 JARVIS_RATE   = 175
 
-# Spanish voice — male
-SPANISH_VOICE = "Rocko (Spanish (Spain))"
+# Spanish voice — Eddy (es_ES), lighter male Castilian Spanish
+SPANISH_VOICE = "Eddy (Spanish (Spain))"
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Greetings
