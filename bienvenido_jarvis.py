@@ -2,10 +2,12 @@
 """
 Double-clap welcome script — Jarvis edition.
 
-Modes:
-  - Clap mode:   2 claps → Jarvis voice greeting → opens YouTube in Chrome
-  - Voice mode:  say "Raibis" → "How can I help you, sir?" → say "change language"
-                 → toggles greeting language between Spanish and English
+Workflow:
+  1. Script starts and waits for 2 claps
+  2. Two claps → opens YouTube in Chrome + speaks greeting in current language
+  3. Say "Raibis" anytime → Jarvis replies "How can I help you, sir?"
+     - Say "change language" → toggles greeting language (persisted to disk)
+     - Say "goodbye"         → Jarvis says goodbye and exits
 
 Dependencies:
     pip install sounddevice numpy vosk
@@ -32,7 +34,7 @@ from vosk import KaldiRecognizer, Model
 # ──────────────────────────────────────────────────────────────────────────────
 #  Configuración
 # ──────────────────────────────────────────────────────────────────────────────
-SAMPLE_RATE   = 16000         # vosk works best at 16 kHz
+SAMPLE_RATE   = 16000
 BLOCK_SIZE    = int(SAMPLE_RATE * 0.05)
 THRESHOLD     = 0.10          # RMS clap threshold — lower = more sensitive
 COOLDOWN      = 0.4           # seconds between accepted claps
@@ -40,16 +42,19 @@ DOUBLE_WINDOW = 2.0           # window to catch the second clap
 
 YOUTUBE_URL   = "https://youtu.be/pAgnJDJN4VA?si=wcRu25cvV6OqouRY&t=5"
 
-VOSK_MODEL    = os.path.join(os.path.dirname(__file__), "vosk-model-small-en-us-0.15")
+SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
+VOSK_MODEL    = os.path.join(SCRIPT_DIR, "vosk-model-small-en-us-0.15")
+LANG_FILE     = os.path.join(SCRIPT_DIR, ".lang")   # persists language setting
 
-# Jarvis voice — British male via macOS 'say'
-JARVIS_VOICE  = "Daniel"      # en_GB — change to "Reed (English (UK))" etc. if preferred
-JARVIS_RATE   = 165           # words per minute (Jarvis-style: measured, not rushed)
+# English voice — lighter British male (less deep than Daniel)
+JARVIS_VOICE  = "Reed (English (UK))"
+JARVIS_RATE   = 175
 
-SPANISH_VOICE = "Mónica"      # es_ES
+# Spanish voice — male
+SPANISH_VOICE = "Rocko (Spanish (Spain))"
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Greetings (both languages)
+#  Greetings
 # ──────────────────────────────────────────────────────────────────────────────
 MENSAJES_ES = [
     "Bienvenido a casa, señor Rubix.",
@@ -64,24 +69,38 @@ MENSAJES_EN = [
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
+#  Persistent language setting
+# ──────────────────────────────────────────────────────────────────────────────
+def load_lang() -> str:
+    if os.path.isfile(LANG_FILE):
+        val = open(LANG_FILE).read().strip()
+        if val in ("es", "en"):
+            return val
+    return "es"
+
+
+def save_lang(value: str):
+    with open(LANG_FILE, "w") as f:
+        f.write(value)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 #  State
 # ──────────────────────────────────────────────────────────────────────────────
 clap_times: list[float] = []
 clap_triggered  = False
 clap_lock       = threading.Lock()
 
-lang            = "es"        # current greeting language: "es" or "en"
-lang_lock       = threading.Lock()
+lang      = load_lang()
+lang_lock = threading.Lock()
 
-voice_queue: queue.Queue = queue.Queue()   # raw audio chunks → vosk thread
-listening_for_command = False              # True while waiting for "change language"
-
+voice_queue: queue.Queue = queue.Queue()
+shutdown_event = threading.Event()
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  TTS helpers
 # ──────────────────────────────────────────────────────────────────────────────
 def hablar_jarvis(texto: str):
-    """British male Jarvis voice."""
     print(f"  [Jarvis] '{texto}'")
     r = subprocess.run(["say", "-v", JARVIS_VOICE, "-r", str(JARVIS_RATE), texto],
                        capture_output=True)
@@ -90,13 +109,11 @@ def hablar_jarvis(texto: str):
 
 
 def hablar_espanol(texto: str):
-    """Native Spanish voice."""
     print(f"  [Español] '{texto}'")
-    fallbacks = ["Paulina", "Rocko (Spanish (Spain))", "Reed (Spanish (Spain))"]
     r = subprocess.run(["say", "-v", SPANISH_VOICE, texto], capture_output=True)
     if r.returncode == 0:
         return
-    for voz in fallbacks:
+    for voz in ["Rocko (Spanish (Mexico))", "Reed (Spanish (Spain))", "Eddy (Spanish (Spain))"]:
         r = subprocess.run(["say", "-v", voz, texto], capture_output=True)
         if r.returncode == 0:
             return
@@ -104,7 +121,6 @@ def hablar_espanol(texto: str):
 
 
 def hablar_bienvenida():
-    """Speak greeting in the current language."""
     with lang_lock:
         current = lang
     if current == "es":
@@ -119,14 +135,14 @@ def hablar_bienvenida():
 def audio_callback(indata, frames, time_info, status):
     global clap_triggered, clap_times
 
-    # Feed raw audio to vosk regardless of clap state
-    voice_queue.put(bytes(indata))
+    raw = bytes(indata)
+    voice_queue.put(raw)
 
     if clap_triggered:
         return
 
-    # Upsample check: vosk uses 16kHz mono int16; indata is float32 — use RMS only
-    rms = float(np.sqrt(np.mean(indata.astype(np.float32) ** 2)))
+    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    rms = float(np.sqrt(np.mean(pcm ** 2)))
     now = time.time()
 
     if rms > THRESHOLD:
@@ -144,79 +160,78 @@ def audio_callback(indata, frames, time_info, status):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Welcome sequence (clap trigger)
+#  Welcome sequence (triggered by 2 claps)
 # ──────────────────────────────────────────────────────────────────────────────
 def secuencia_bienvenida():
-    global clap_triggered
     print("\n  Iniciando secuencia de bienvenida...\n")
-    hablar_bienvenida()
     abrir_youtube()
+    hablar_bienvenida()
     print("\n  Secuencia completada.\n")
 
 
 def abrir_youtube():
     print("  Opening YouTube in Chrome...")
     subprocess.Popen(["open", "-a", "Google Chrome", YOUTUBE_URL])
-    time.sleep(1.2)
+    time.sleep(1.0)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Voice command thread (vosk wake-word + dialog)
+#  Voice command thread
 # ──────────────────────────────────────────────────────────────────────────────
 def voice_thread(model: Model):
-    """
-    Listens continuously. Wake word: 'raibis'.
-    After wake: asks how to help, waits for 'change language'.
-    """
-    global listening_for_command, lang
+    global lang
 
-    rec = KaldiRecognizer(model, SAMPLE_RATE)
-    # Restrict vocabulary to speed up detection and reduce false positives
-    rec_wake = KaldiRecognizer(model, SAMPLE_RATE,
-                               '["raibis", "ray bis", "rabis", "[unk]"]')
-    rec_cmd  = KaldiRecognizer(model, SAMPLE_RATE,
-                               '["change language", "change", "language", "[unk]"]')
+    # Vosk doesn't know "raibis" — use phonetic stand-ins it does recognize
+    WAKE_VOCAB     = '["ray bus", "rubies", "ray b", "ribbis", "raybus", "[unk]"]'
+    WAKE_TRIGGERS  = ["ray bus", "rubies", "ray b", "ribbis", "raybus"]
 
-    state = "wake"   # "wake" | "command"
+    CMD_VOCAB      = '["change language", "change", "language", "goodbye", "good bye", "[unk]"]'
 
+    rec_wake = KaldiRecognizer(model, SAMPLE_RATE, WAKE_VOCAB)
+    rec_cmd  = KaldiRecognizer(model, SAMPLE_RATE, CMD_VOCAB)
+
+    state = "wake"
     print("  [Voice] Listening for 'Raibis'...")
 
-    while True:
+    while not shutdown_event.is_set():
         try:
-            chunk = voice_queue.get(timeout=1)
+            chunk = voice_queue.get(timeout=0.5)
         except queue.Empty:
             continue
 
         if state == "wake":
             if rec_wake.AcceptWaveform(chunk):
-                result = json.loads(rec_wake.Result())
-                text = result.get("text", "").lower()
-                if any(w in text for w in ["raibis", "ray bis", "rabis"]):
-                    print(f"  [Voice] Wake word detected: '{text}'")
+                text = json.loads(rec_wake.Result()).get("text", "").lower()
+                if any(w in text for w in WAKE_TRIGGERS):
+                    print(f"  [Voice] Wake word: '{text}'")
                     threading.Thread(
                         target=lambda: hablar_jarvis("How can I help you, sir?"),
                         daemon=True
                     ).start()
-                    state = "command"
-                    # drain stale audio
+                    # drain queue, reset command recognizer, switch state
                     while not voice_queue.empty():
                         voice_queue.get_nowait()
-                    rec_cmd = KaldiRecognizer(model, SAMPLE_RATE,
-                                             '["change language", "change", "language", "[unk]"]')
+                    rec_cmd = KaldiRecognizer(model, SAMPLE_RATE, CMD_VOCAB)
+                    state = "command"
 
         elif state == "command":
             if rec_cmd.AcceptWaveform(chunk):
-                result = json.loads(rec_cmd.Result())
-                text = result.get("text", "").lower()
-                print(f"  [Voice] Heard: '{text}'")
+                text = json.loads(rec_cmd.Result()).get("text", "").lower()
+                print(f"  [Voice] Command: '{text}'")
+
                 if "change" in text or "language" in text:
                     threading.Thread(target=handle_change_language, daemon=True).start()
+                elif "goodbye" in text or "good bye" in text:
+                    threading.Thread(target=handle_goodbye, daemon=True).start()
+                    return
                 else:
                     hablar_jarvis("I did not catch that, sir.")
+
+                # Back to waiting for wake word
+                while not voice_queue.empty():
+                    voice_queue.get_nowait()
+                rec_wake = KaldiRecognizer(model, SAMPLE_RATE, WAKE_VOCAB)
                 state = "wake"
-                # reset wake recognizer
-                rec_wake = KaldiRecognizer(model, SAMPLE_RATE,
-                                           '["raibis", "ray bis", "rabis", "[unk]"]')
 
 
 def handle_change_language():
@@ -224,9 +239,16 @@ def handle_change_language():
     with lang_lock:
         lang = "en" if lang == "es" else "es"
         new_lang = lang
+    save_lang(new_lang)
     label = "English" if new_lang == "en" else "Spanish"
-    print(f"  [Voice] Language switched to: {label}")
+    print(f"  [Voice] Language → {label}")
     hablar_jarvis(f"Switching greetings to {label}, sir.")
+
+
+def handle_goodbye():
+    hablar_jarvis("Goodbye, sir. Have a great day.")
+    time.sleep(0.5)
+    shutdown_event.set()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -235,27 +257,30 @@ def handle_change_language():
 def main():
     global clap_triggered
 
-    # Load vosk model
     if not os.path.isdir(VOSK_MODEL):
         print(f"\n  ERROR: Vosk model not found at: {VOSK_MODEL}")
-        print("  Download it with:")
+        print("  Run:")
         print("    curl -L -o model.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip")
         print("    unzip model.zip")
         sys.exit(1)
 
     import vosk
-    vosk.SetLogLevel(-1)   # silence vosk logs
+    vosk.SetLogLevel(-1)
     model = Model(VOSK_MODEL)
 
-    # Start voice thread
-    t = threading.Thread(target=voice_thread, args=(model,), daemon=True)
-    t.start()
+    threading.Thread(target=voice_thread, args=(model,), daemon=True).start()
+
+    with lang_lock:
+        current_lang = lang
 
     print("=" * 55)
-    print("  Escuchando aplausos y comandos de voz...")
-    print(f"  Wake word: 'Raibis'  |  Threshold: {THRESHOLD}")
-    print(f"  Greeting language: {'Spanish' if lang == 'es' else 'English'}")
-    print("  Ctrl+C to exit")
+    print("  Raibis Voice — ready")
+    print(f"  Greeting language : {'Spanish' if current_lang == 'es' else 'English'}")
+    print(f"  Clap threshold    : {THRESHOLD}")
+    print("  Commands (say 'Raibis' first):")
+    print("    'Change language' — toggle ES / EN")
+    print("    'Goodbye'         — exit")
+    print("  Ctrl+C to force exit")
     print("=" * 55)
 
     try:
@@ -266,15 +291,15 @@ def main():
             dtype="int16",
             callback=audio_callback,
         ):
-            while True:
+            while not shutdown_event.is_set():
                 time.sleep(0.1)
                 if clap_triggered:
-                    time.sleep(8)
+                    time.sleep(6)
                     clap_triggered = False
                     print("\n  Escuchando de nuevo...\n")
     except KeyboardInterrupt:
         print("\n\nHasta luego!")
-        sys.exit(0)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
